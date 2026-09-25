@@ -5,14 +5,17 @@ import { BrowserRouter } from "react-router"
 import "./index.css"
 import App from "./App"
 
-import { AppProvider } from "./context/AppProvider"
+import { AuthProvider } from "./context/AuthProvider"
+import { registerServiceWorker } from "./lib/push"
+
+registerServiceWorker()
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <BrowserRouter>
-      <AppProvider>
+      <AuthProvider>
         <App />
-      </AppProvider>
+      </AuthProvider>
     </BrowserRouter>
   </StrictMode>,
 )

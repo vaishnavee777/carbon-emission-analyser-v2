@@ -1,0 +1,19 @@
+{
+  "name": "Carbon Emission Analyser",
+  "short_name": "Carbon",
+  "description": "Track your daily carbon footprint and watch your tree grow.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#17112f",
+  "theme_color": "#17112f",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

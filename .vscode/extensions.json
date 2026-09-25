@@ -1,0 +1,8 @@
+{
+  "recommendations": [
+    "lirobi.phone-preview",
+    "ms-python.python",
+    "dbaeumer.vscode-eslint",
+    "bradlc.vscode-tailwindcss"
+  ]
+}

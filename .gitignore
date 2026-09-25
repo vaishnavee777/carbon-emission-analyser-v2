@@ -35,3 +35,5 @@ Thumbs.db
 
 # Build/cache
 .cache/
+# Trained model weights
+backend/app/ml/artifacts/

@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useState,
@@ -11,75 +12,51 @@ import {
   type AppSettings,
 } from "./AppContext"
 
-const initialActivities: Activity[] = [
-  {
-    id: "1",
-    category: "Transportation",
-    activity: "Car",
-    quantity: 15,
-    unit: "km",
-    emissions: 2.7,
-    date: new Date().toISOString(),
-  },
-  {
-    id: "2",
-    category: "Electricity",
-    activity: "Electricity",
-    quantity: 16,
-    unit: "kWh",
-    emissions: 11.2,
-    date: new Date().toISOString(),
-  },
-  {
-    id: "3",
-    category: "Food",
-    activity: "Meal",
-    quantity: 3,
-    unit: "meal",
-    emissions: 7.5,
-    date: new Date().toISOString(),
-  },
-]
+import { api } from "../lib/api"
+import { useAuth } from "./useAuth"
 
 const defaultSettings: AppSettings = {
   units: "metric",
-  dailyReminder: true,
+  dailyReminder: false,
   weeklySummary: true,
   reminderTime: "20:00",
+  weeklyGoal: 50,
 }
 
-function getStoredActivities(): Activity[] {
+function settingsKey(userId: number) {
+  return `carbon-settings-${userId}`
+}
+
+function getStoredSettings(userId: number): AppSettings {
   try {
     const stored =
       localStorage.getItem(
-        "carbon-activities",
+        settingsKey(userId),
       )
 
-    if (!stored) {
-      return initialActivities
-    }
-
-    return JSON.parse(stored)
-  } catch {
-    return initialActivities
-  }
-}
-
-function getStoredSettings(): AppSettings {
-  try {
-    const stored =
-      localStorage.getItem(
-        "carbon-settings",
-      )
-
-    if (!stored) {
-      return defaultSettings
-    }
-
-    return JSON.parse(stored)
+    return stored
+      ? { ...defaultSettings, ...JSON.parse(stored) }
+      : defaultSettings
   } catch {
     return defaultSettings
   }
+}
+
+function sumBetween(
+  activities: Activity[],
+  start: Date,
+  end: Date,
+) {
+  return activities
+    .filter((activity) => {
+      const date = new Date(activity.date)
+      return date >= start && date < end
+    })
+    .reduce(
+      (total, activity) =>
+        total + activity.emissions,
+      0,
+    )
 }
 
 export function AppProvider({
@@ -88,49 +65,66 @@ export function AppProvider({
   children: ReactNode
 }) {
   const [activities, setActivities] =
-    useState<Activity[]>(
-      getStoredActivities,
-    )
+    useState<Activity[]>([])
+
+  const [activitiesLoading, setActivitiesLoading] =
+    useState(true)
+
+  const [activitiesError, setActivitiesError] =
+    useState<string | null>(null)
+
+  const { user } = useAuth()
+  const userId = user!.id
 
   const [settings, setSettings] =
     useState<AppSettings>(
-      getStoredSettings,
+      () => getStoredSettings(userId),
     )
 
-  /*
-   * Save activities whenever they change.
-   */
-  useEffect(() => {
-    localStorage.setItem(
-      "carbon-activities",
-      JSON.stringify(activities),
-    )
-  }, [activities])
+  const refreshActivities = useCallback(async () => {
+    try {
+      const data = await api.activities()
 
-  /*
-   * Save settings whenever they change.
-   */
-  useEffect(() => {
-    localStorage.setItem(
-      "carbon-settings",
-      JSON.stringify(settings),
-    )
-  }, [settings])
-
-  function addActivity(
-    activity: Omit<Activity, "id" | "date">,
-  ) {
-    const newActivity: Activity = {
-      ...activity,
-      id: crypto.randomUUID(),
-      date: new Date().toISOString(),
+      setActivities(
+        data.map((activity) => ({
+          id: String(activity.id),
+          category: activity.category,
+          activity: activity.activity,
+          quantity: activity.quantity,
+          unit: activity.unit,
+          emissions: activity.emissions,
+          // Backend stores naive UTC timestamps.
+          date: `${activity.activity_date}Z`,
+        })),
+      )
+      setActivitiesError(null)
+    } catch (error) {
+      setActivitiesError(
+        error instanceof Error
+          ? error.message
+          : "Couldn't load activities.",
+      )
+    } finally {
+      setActivitiesLoading(false)
     }
+  }, [])
 
-    setActivities((current) => [
-      ...current,
-      newActivity,
-    ])
-  }
+  useEffect(() => {
+    // Initial load from the API; state updates happen after the fetch resolves.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    refreshActivities()
+  }, [refreshActivities])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        settingsKey(userId),
+        JSON.stringify(settings),
+      )
+    } catch {
+      // Storage unavailable (private mode); settings stay in memory.
+    }
+  }, [settings, userId])
 
   function updateSettings(
     newSettings: Partial<AppSettings>,
@@ -141,53 +135,38 @@ export function AppProvider({
     }))
   }
 
-  const weeklyEmissions = useMemo(() => {
+  const {
+    weeklyEmissions,
+    previousWeekEmissions,
+    monthlyEmissions,
+  } = useMemo(() => {
     const now = new Date()
 
     const startOfWeek = new Date(now)
+    startOfWeek.setDate(now.getDate() - now.getDay())
+    startOfWeek.setHours(0, 0, 0, 0)
 
-    startOfWeek.setDate(
-      now.getDate() - now.getDay(),
-    )
+    const startOfPreviousWeek = new Date(startOfWeek)
+    startOfPreviousWeek.setDate(startOfWeek.getDate() - 7)
 
-    startOfWeek.setHours(
-      0,
-      0,
-      0,
-      0,
-    )
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
+    const farFuture = new Date(8.64e15)
 
-    return activities
-      .filter((activity) => {
-        const activityDate =
-          new Date(activity.date)
-
-        return activityDate >= startOfWeek
-      })
-      .reduce(
-        (total, activity) =>
-          total + activity.emissions,
-        0,
-      )
+    return {
+      weeklyEmissions: sumBetween(activities, startOfWeek, farFuture),
+      previousWeekEmissions: sumBetween(activities, startOfPreviousWeek, startOfWeek),
+      monthlyEmissions: sumBetween(activities, startOfMonth, farFuture),
+    }
   }, [activities])
-
-  /*
-   * Temporary previous-week value.
-   *
-   * Later this will be calculated from
-   * historical MySQL data.
-   */
-  const previousWeekEmissions = 42
-
-  const monthlyEmissions =
-    weeklyEmissions * 4
 
   return (
     <AppContext.Provider
       value={{
         activities,
+        activitiesLoading,
+        activitiesError,
+        refreshActivities,
         settings,
-        addActivity,
         updateSettings,
         weeklyEmissions,
         previousWeekEmissions,

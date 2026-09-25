@@ -11,7 +11,11 @@ function CarbonSummary({
 }: CarbonSummaryProps) {
 
   const percentageChange =
-    ((current - previous) / previous) * 100
+    previous === 0
+      ? current > 0
+        ? 100
+        : 0
+      : ((current - previous) / previous) * 100
 
   const increased = percentageChange > 0
 

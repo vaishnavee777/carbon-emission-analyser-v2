@@ -1,4 +1,9 @@
+import { useState } from "react"
+
 import { useApp } from "../../context/useApp"
+import { useAuth } from "../../context/useAuth"
+import { api } from "../../lib/api"
+import { disableReminders, enableReminders } from "../../lib/push"
 
 import {
   Bell,
@@ -9,6 +14,7 @@ import {
   User,
   Settings,
   Info,
+  LogOut,
 } from "lucide-react"
 
 function Profile() {
@@ -16,6 +22,77 @@ function Profile() {
     settings,
     updateSettings,
   } = useApp()
+
+  const { user, logout } = useAuth()
+  const [signingOut, setSigningOut] = useState(false)
+
+  const displayName = user?.name ?? ""
+  const initials = displayName
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0].toUpperCase())
+    .join("")
+
+  async function handleLogout() {
+    setSigningOut(true)
+    try {
+      // Stop this device's reminders so the next person to sign in doesn't get them.
+      if (settings.dailyReminder) {
+        await disableReminders().catch(() => {})
+        updateSettings({ dailyReminder: false })
+      }
+      await logout()
+    } finally {
+      setSigningOut(false)
+    }
+  }
+
+  const [reminderBusy, setReminderBusy] = useState(false)
+  const [reminderStatus, setReminderStatus] = useState<string | null>(null)
+
+  async function runReminderAction(action: () => Promise<string>) {
+    setReminderBusy(true)
+    try {
+      setReminderStatus(await action())
+    } catch (error) {
+      setReminderStatus(
+        error instanceof Error ? error.message : "Something went wrong.",
+      )
+    } finally {
+      setReminderBusy(false)
+    }
+  }
+
+  function toggleReminder() {
+    runReminderAction(async () => {
+      if (settings.dailyReminder) {
+        await disableReminders()
+        updateSettings({ dailyReminder: false })
+        return "Daily reminders are off."
+      }
+      await enableReminders(settings.reminderTime)
+      updateSettings({ dailyReminder: true })
+      return `You'll get a reminder every day at ${settings.reminderTime}.`
+    })
+  }
+
+  function changeReminderTime(reminderTime: string) {
+    updateSettings({ reminderTime })
+    if (settings.dailyReminder && reminderTime) {
+      runReminderAction(async () => {
+        await enableReminders(reminderTime)
+        return `Reminder moved to ${reminderTime}.`
+      })
+    }
+  }
+
+  function sendTestNotification() {
+    runReminderAction(async () => {
+      await api.testNotification()
+      return "Test notification sent. Check your notifications."
+    })
+  }
 
   return (
     <div className="relative min-h-screen overflow-hidden px-5">
@@ -63,17 +140,17 @@ function Profile() {
           <div className="flex items-center gap-4">
 
             <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[var(--lavender-light)] text-xl font-semibold text-[var(--bg-deep)]">
-              LS
+              {initials}
             </div>
 
             <div>
 
               <h2 className="text-xl font-semibold">
-                Lahari
+                {displayName}
               </h2>
 
               <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                Building a lower-carbon lifestyle
+                {user?.email}
               </p>
 
             </div>
@@ -119,9 +196,20 @@ function Profile() {
 
               </div>
 
-              <p className="text-lg font-semibold">
+              <p className="flex items-center text-lg font-semibold">
 
-                50
+                <input
+                  type="number"
+                  min={1}
+                  inputMode="numeric"
+                  value={settings.weeklyGoal}
+                  onChange={(event) => {
+                    const value = Number(event.target.value)
+                    if (value > 0) updateSettings({ weeklyGoal: value })
+                  }}
+                  className="w-16 rounded-lg border border-white/10 bg-[var(--bg-primary)] px-2 py-1 text-right text-lg font-semibold outline-none"
+                  aria-label="Weekly target in kg CO2e"
+                />
 
                 <span className="ml-1 text-xs font-normal text-[var(--text-muted)]">
                   kg CO₂e
@@ -179,13 +267,9 @@ function Profile() {
               </div>
 
               <button
-                onClick={() =>
-                  updateSettings({
-                    dailyReminder:
-                      !settings.dailyReminder,
-                  })
-                }
-                className={`relative h-7 w-12 rounded-full transition-colors ${
+                onClick={toggleReminder}
+                disabled={reminderBusy}
+                className={`relative h-7 w-12 rounded-full transition-colors disabled:opacity-60 ${
                   settings.dailyReminder
                     ? "bg-[var(--lavender)]"
                     : "bg-white/10"
@@ -194,7 +278,7 @@ function Profile() {
               >
 
                 <span
-                  className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                  className={`absolute left-0 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform ${
                     settings.dailyReminder
                       ? "translate-x-6"
                       : "translate-x-1"
@@ -240,10 +324,7 @@ function Profile() {
                   type="time"
                   value={settings.reminderTime}
                   onChange={(event) =>
-                    updateSettings({
-                      reminderTime:
-                        event.target.value,
-                    })
+                    changeReminderTime(event.target.value)
                   }
                   className="rounded-lg border border-white/10 bg-[var(--bg-primary)] px-2 py-1 text-sm text-[var(--text-primary)] outline-none"
                 />
@@ -299,7 +380,7 @@ function Profile() {
                 >
 
                   <span
-                    className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                    className={`absolute left-0 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform ${
                       settings.weeklySummary
                         ? "translate-x-6"
                         : "translate-x-1"
@@ -313,6 +394,22 @@ function Profile() {
             </div>
 
           </div>
+
+          {reminderStatus && (
+            <p className="mt-3 text-sm text-[var(--text-secondary)]" role="status">
+              {reminderStatus}
+            </p>
+          )}
+
+          {settings.dailyReminder && (
+            <button
+              onClick={sendTestNotification}
+              disabled={reminderBusy}
+              className="mt-3 w-full rounded-2xl border border-white/10 bg-[var(--bg-secondary)] px-4 py-3 text-sm font-medium text-[var(--lavender-light)] transition hover:bg-white/10 disabled:opacity-60"
+            >
+              Send a test notification
+            </button>
+          )}
 
         </section>
 
@@ -457,6 +554,15 @@ function Profile() {
           </div>
 
         </section>
+
+        <button
+          onClick={handleLogout}
+          disabled={signingOut}
+          className="mt-8 flex w-full items-center justify-center gap-2 rounded-2xl border border-white/10 bg-[var(--bg-secondary)] px-4 py-4 text-sm font-medium text-red-200 transition hover:bg-white/10 disabled:opacity-60"
+        >
+          <LogOut size={17} />
+          {signingOut ? "Signing out…" : "Sign out"}
+        </button>
 
       </div>
 

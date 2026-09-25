@@ -1,48 +1,109 @@
-import { useState } from "react"
-import { ArrowLeft, Car, Zap, Utensils, ShoppingBag, Check } from "lucide-react"
+import { useEffect, useMemo, useState } from "react"
+import { ArrowLeft, Check, ChevronRight, MapPin } from "lucide-react"
 import { useNavigate } from "react-router"
 
-const categories = [
-  {
-    name: "Transportation",
-    icon: Car,
-    activities: [
-      { name: "Car", unit: "km" },
-      { name: "Bus", unit: "km" },
-    ],
-  },
-  {
-    name: "Electricity",
-    icon: Zap,
-    activities: [
-      { name: "Electricity", unit: "kWh" },
-    ],
-  },
-  {
-    name: "Food",
-    icon: Utensils,
-    activities: [
-      { name: "Meal", unit: "meal" },
-    ],
-  },
-  {
-    name: "Shopping",
-    icon: ShoppingBag,
-    activities: [
-      { name: "Purchase", unit: "₹" },
-    ],
-  },
-]
+import { useApp } from "../../context/useApp"
+import { api, type EmissionFactor, type GridIntensity, type GridIntensityAt } from "../../lib/api"
+import { CategoryIcon } from "../../lib/categories"
+
+// Value for <input type="datetime-local">, in the device's local time.
+function toLocalInput(date: Date) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+  return local.toISOString().slice(0, 16)
+}
+
+function isGridElectricity(category: string, activity: string) {
+  return category === "Electricity" && activity === "Grid Electricity"
+}
 
 function LogActivity() {
   const navigate = useNavigate()
+  const { refreshActivities } = useApp()
 
-  const [category, setCategory] = useState("Transportation")
-  const [activity, setActivity] = useState("Car")
+  const [factors, setFactors] = useState<EmissionFactor[]>([])
+  const [grid, setGrid] = useState<GridIntensity | null>(null)
+  const [when, setWhen] = useState<"now" | "earlier">("now")
+  const [earlierValue, setEarlierValue] = useState(() => toLocalInput(new Date(Date.now() - 3600000)))
+  const [gridAt, setGridAt] = useState<GridIntensityAt | null>(null)
+  const [category, setCategory] = useState("")
+  const [activity, setActivity] = useState("")
   const [quantity, setQuantity] = useState("")
   const [loading, setLoading] = useState(false)
   const [success, setSuccess] = useState(false)
   const [error, setError] = useState("")
+
+  useEffect(() => {
+    api
+      .emissionFactors()
+      .then((data) => {
+        setFactors(data)
+        if (data.length > 0) {
+          setCategory(data[0].category)
+          setActivity(data[0].activity)
+        }
+      })
+      .catch((err: Error) => setError(err.message))
+
+    api.gridIntensity().then(setGrid).catch(() => setGrid(null))
+  }, [])
+
+  const earlierDate = useMemo(() => new Date(earlierValue), [earlierValue])
+  const earlierValid = !Number.isNaN(earlierDate.getTime())
+  const needsGridAt = when === "earlier" && earlierValid && isGridElectricity(category, activity)
+
+  useEffect(() => {
+    if (!needsGridAt) return
+    let cancelled = false
+    const timer = setTimeout(() => {
+      api
+        .gridIntensityAt(earlierDate.toISOString())
+        .then((result) => {
+          if (!cancelled) setGridAt(result)
+        })
+        .catch(() => {
+          if (!cancelled) setGridAt(null)
+        })
+    }, 300)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [needsGridAt, earlierDate])
+
+  // Which grid reading applies: the hour it happened, or right now.
+  const gridForLog = useMemo(() => {
+    if (when === "now") return grid
+    return needsGridAt && gridAt
+      ? { g_per_kwh: gridAt.g_per_kwh, source: gridAt.source, measured_at: gridAt.measured_at }
+      : null
+  }, [when, grid, needsGridAt, gridAt])
+
+  const categories = useMemo(() => {
+    const grouped = new Map<string, EmissionFactor[]>()
+    for (const factor of factors) {
+      grouped.set(factor.category, [...(grouped.get(factor.category) ?? []), factor])
+    }
+    return [...grouped].map(([name, items]) => ({
+      name,
+      activities: items.map((item) => {
+        const useGrid =
+          gridForLog !== null &&
+          gridForLog.source !== "static" &&
+          isGridElectricity(item.category, item.activity) &&
+          item.unit === "kWh"
+        let note = ""
+        if (useGrid) {
+          note = gridForLog.source === "historical" ? " · grid then" : " · live"
+        }
+        return {
+          name: item.activity,
+          unit: item.unit,
+          factor: useGrid ? Number((gridForLog.g_per_kwh / 1000).toFixed(3)) : item.factor,
+          note,
+        }
+      }),
+    }))
+  }, [factors, gridForLog])
 
   const selectedCategory = categories.find(
     (item) => item.name === category
@@ -84,35 +145,23 @@ function LogActivity() {
       return
     }
 
+    if (when === "earlier" && !earlierValid) {
+      setError("Pick a date and time.")
+      return
+    }
+
     setLoading(true)
 
     try {
-      const response = await fetch(
-        "http://127.0.0.1:8000/activities/",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            user_id: 1,
-            category,
-            activity,
-            quantity: Number(quantity),
-            unit: selectedActivity.unit,
-          }),
-        }
-      )
+      await api.createActivity({
+        category,
+        activity,
+        quantity: Number(quantity),
+        unit: selectedActivity.unit,
+        activity_date: when === "earlier" ? earlierDate.toISOString() : undefined,
+      })
 
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(
-          data.detail || "Unable to save activity."
-        )
-      }
-
-      console.log("Activity saved:", data)
+      await refreshActivities()
 
       setSuccess(true)
       setQuantity("")
@@ -121,8 +170,6 @@ function LogActivity() {
         navigate("/")
       }, 1000)
     } catch (err) {
-      console.error(err)
-
       setError(
         err instanceof Error
           ? err.message
@@ -193,8 +240,6 @@ function LogActivity() {
 
             {categories.map((item) => {
 
-              const Icon = item.icon
-
               const selected =
                 category === item.name
 
@@ -214,7 +259,8 @@ function LogActivity() {
                   <div className="flex items-center justify-between">
 
                     <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--lavender)]/10">
-                      <Icon
+                      <CategoryIcon
+                        category={item.name}
                         size={19}
                         className="text-[var(--lavender)]"
                       />
@@ -240,6 +286,24 @@ function LogActivity() {
           </div>
 
         </section>
+
+        {category === "Transport" && (
+          <button
+            onClick={() => navigate("/trip")}
+            className="mt-4 flex w-full items-center gap-3 rounded-2xl border border-[var(--lavender)]/30 bg-[var(--lavender)]/10 p-4 text-left transition hover:bg-[var(--lavender)]/15"
+          >
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--lavender)]/15">
+              <MapPin size={19} className="text-[var(--lavender)]" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium">Track a trip with GPS</p>
+              <p className="mt-0.5 text-xs text-[var(--text-muted)]">
+                We'll measure the distance and detect how you travelled
+              </p>
+            </div>
+            <ChevronRight size={18} className="shrink-0 text-[var(--text-muted)]" />
+          </button>
+        )}
 
         {/* Activity */}
         <section className="mt-8">
@@ -273,7 +337,8 @@ function LogActivity() {
                   </span>
 
                   <span className="text-xs text-[var(--text-muted)]">
-                    per {item.unit}
+                    {item.factor} kg per {item.unit}
+                    {item.note}
                   </span>
 
                 </button>
@@ -314,6 +379,58 @@ function LogActivity() {
             </div>
 
           </div>
+
+        </section>
+
+        {/* When */}
+        <section className="mt-8">
+
+          <p className="text-lg font-medium">
+            When?
+          </p>
+
+          <div className="mt-4 flex gap-2" role="radiogroup" aria-label="When did this happen?">
+            {(["now", "earlier"] as const).map((option) => (
+              <button
+                key={option}
+                role="radio"
+                aria-checked={when === option}
+                onClick={() => setWhen(option)}
+                className={`flex-1 rounded-2xl border p-3 text-sm font-medium transition ${
+                  when === option
+                    ? "border-[var(--lavender)] bg-[var(--lavender)]/15"
+                    : "border-white/10 bg-[var(--bg-secondary)] text-[var(--text-secondary)]"
+                }`}
+              >
+                {option === "now" ? "Just now" : "Earlier"}
+              </button>
+            ))}
+          </div>
+
+          {when === "earlier" && (
+            <label className="mt-3 block">
+              <span className="sr-only">Date and time</span>
+              <input
+                type="datetime-local"
+                value={earlierValue}
+                max={toLocalInput(new Date())}
+                onChange={(event) => setEarlierValue(event.target.value)}
+                className="w-full rounded-2xl border border-white/10 bg-[var(--bg-secondary)] px-4 py-3 text-base text-[var(--text-primary)] outline-none focus:border-[var(--lavender)]"
+              />
+            </label>
+          )}
+
+          {when === "earlier" && isGridElectricity(category, activity) && (
+            <p className="mt-2 text-xs text-[var(--text-muted)]">
+              {gridAt?.source === "historical"
+                ? `The grid was at ${Math.round(gridAt.g_per_kwh)} g CO₂/kWh then${
+                    grid && grid.source !== "static"
+                      ? ` (${Math.round(grid.g_per_kwh)} right now)`
+                      : ""
+                  }.`
+                : "No grid data for that time, so the standard factor is used."}
+            </p>
+          )}
 
         </section>
 

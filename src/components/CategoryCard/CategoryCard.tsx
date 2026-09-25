@@ -1,37 +1,22 @@
-import {
-  Car,
-  Zap,
-  Utensils,
-  ShoppingBag,
-} from "lucide-react"
+import { CategoryIcon } from "../../lib/categories"
 
 interface CategoryCardProps {
   category: string
   value: number
-  icon: string
-}
-
-const icons = {
-  car: Car,
-  zap: Zap,
-  utensils: Utensils,
-  "shopping-bag": ShoppingBag,
 }
 
 function CategoryCard({
   category,
   value,
-  icon,
 }: CategoryCardProps) {
-  const Icon =
-    icons[icon as keyof typeof icons] ?? Car
 
   return (
     <div className="group min-w-0 flex-1 rounded-[1.5rem] border border-white/10 bg-gradient-to-br from-[var(--bg-secondary)] to-[var(--bg-primary)] p-4 shadow-lg shadow-black/10 transition-transform duration-200 hover:-translate-y-1">
 
       {/* Icon */}
       <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--lavender)]/10 transition-colors group-hover:bg-[var(--lavender)]/20">
-        <Icon
+        <CategoryIcon
+          category={category}
           size={19}
           strokeWidth={1.8}
           className="text-[var(--lavender)]"

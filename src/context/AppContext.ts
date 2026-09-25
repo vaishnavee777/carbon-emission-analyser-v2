@@ -15,15 +15,16 @@ export interface AppSettings {
   dailyReminder: boolean
   weeklySummary: boolean
   reminderTime: string
+  weeklyGoal: number
 }
 
 export interface AppContextType {
   activities: Activity[]
-  settings: AppSettings
+  activitiesLoading: boolean
+  activitiesError: string | null
+  refreshActivities: () => Promise<void>
 
-  addActivity: (
-    activity: Omit<Activity, "id" | "date">
-  ) => void
+  settings: AppSettings
 
   updateSettings: (
     settings: Partial<AppSettings>

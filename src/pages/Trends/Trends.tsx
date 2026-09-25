@@ -4,22 +4,13 @@ import {
   ArrowLeft,
   ArrowUpRight,
   ArrowDownRight,
-  Car,
-  Zap,
-  Utensils,
-  ShoppingBag,
 } from "lucide-react"
 
 import { useNavigate } from "react-router"
 
 import { useApp } from "../../context/useApp"
+import { CategoryIcon } from "../../lib/categories"
 
-const categoryIcons = {
-  Transportation: Car,
-  Electricity: Zap,
-  Food: Utensils,
-  Shopping: ShoppingBag,
-}
 
 function Trends() {
   const navigate = useNavigate()
@@ -47,7 +38,13 @@ function Trends() {
    * Calculate emissions for each category.
    */
   const categoryTotals = useMemo(() => {
-    return activities.reduce<
+    const startOfWeek = new Date()
+    startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay())
+    startOfWeek.setHours(0, 0, 0, 0)
+
+    return activities
+      .filter((activity) => new Date(activity.date) >= startOfWeek)
+      .reduce<
       Record<string, number>
     >((totals, activity) => {
       totals[activity.category] =
@@ -340,11 +337,6 @@ function Trends() {
 
               categories.map((item) => {
 
-                const Icon =
-                  categoryIcons[
-                    item.category as keyof typeof categoryIcons
-                  ] ?? Car
-
                 const percentage =
                   current === 0
                     ? 0
@@ -364,7 +356,8 @@ function Trends() {
 
                         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--lavender)]/10">
 
-                          <Icon
+                          <CategoryIcon
+                            category={item.category}
                             size={18}
                             className="text-[var(--lavender)]"
                           />
